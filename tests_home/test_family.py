@@ -91,3 +91,95 @@ class FamilyTests(unittest.IsolatedAsyncioTestCase):
     async def test_diagnostics_no_identifiers(self):
         d=json.dumps(await self.p.diagnostics())
         self.assertNotIn("Alice",d);self.assertNotIn("profile_token",d)
+    async def test_saved_mix_survives_preview_eviction_and_applies_new_ban(self):
+        preset=await self.p.preset_save("Morning","mix",["Alice"],player="Salon",minutes=12)
+        original=self.p._state["presets"][preset["id"]]["tracks"]
+        self.p._state["mixes"].clear()
+        await self.p.feedback("Alice","ban",track_id=original[0]["id"])
+        await self.p.preset_play("Morning")
+        args=self.p.mass.player_queues.play_media.call_args.args
+        self.assertEqual(len(args[1]),len(original)-1)
+        self.assertNotIn(original[0]["uri"],args[1])
+        with self.assertRaises(Exception):await self.p.preset_save("morning","mix",["Alice"])
+    async def test_playlist_is_owned_by_selected_account(self):
+        self.p.providers()[0]._api=AsyncMock(return_value=[{"ID":"42","Name":"Chill"}])
+        with self.assertRaises(Exception):await self.p.preset_save("Bad","playlist",["Alice"],playlist_id="7")
+        await self.p.preset_save("Good","playlist",["Alice"],playlist_id="42")
+        with self.assertRaises(Exception):await self.p.preset_save("Two","flow",["Alice","Bob"])
+    async def test_flow_preview_does_not_play_and_empty_does_not_fallback(self):
+        self.p.providers()[0]._api=AsyncMock(return_value=[{"ID":"88","Name":"Flow track"}])
+        result=await self.p.flow("Alice",preview=True)
+        self.assertEqual(result["source"],"deezer_flow")
+        self.assertEqual(self.p.mass.player_queues.play_media.await_count,0)
+        await self.p.flow("Alice","Salon")
+        self.assertEqual(self.p.mass.player_queues.play_media.call_args.args[1],["opendeezer_home--a://track/88"])
+        self.p.providers()[0]._api=AsyncMock(return_value=[])
+        with self.assertRaises(Exception):await self.p.flow("Alice","Salon")
+        self.assertEqual(self.p.mass.player_queues.play_media.await_count,1)
+    async def test_delete_preset_does_not_touch_music_library(self):
+        p=await self.p.preset_save("Morning","mix",["Alice"])
+        await self.p.preset_delete(p["id"])
+        self.assertEqual(self.p._state["presets"],{})
+        self.assertEqual(self.p.mass.player_queues.play_media.await_count,0)
+    async def test_named_playlist_never_uses_other_account(self):
+        a,b=self.p.providers()
+        async def api(route,**kw):
+            if route=='playlists':return []
+            if route=='search':return {'Playlists':[{'ID':'42','Name':'Pop Rock 2010'}]}
+            return [{'ID':'88','Name':'Track'}]
+        a._api=AsyncMock(side_effect=api);b._api=AsyncMock(side_effect=AssertionError('Wrong account'))
+        result=await self.p.playlist_play('Alice','Pop Rock 2010',preview=True)
+        self.assertEqual(result['member'],'Alice')
+        self.assertEqual(self.p.mass.player_queues.play_media.await_count,0)
+        await self.p.playlist_play('Alice','Pop Rock 2010','Salon')
+        self.assertEqual(self.p.mass.player_queues.play_media.call_args.args[1],['opendeezer_home--a://track/88'])
+        b._api.assert_not_called()
+        a._api=AsyncMock(return_value=[])
+        with self.assertRaises(Exception):await self.p.playlist_play('Alice','Absent','Salon')
+        self.assertEqual(self.p.mass.player_queues.play_media.await_count,1)
+    async def test_flow_does_not_refill_replaced_queue(self):
+        q=NS(state='playing',items=2,current_index=0)
+        self.p.mass.player_queues.get=lambda _:q
+        self.p.mass.player_queues.items=lambda *a,**k:[NS(queue_item_id='new-user-queue')]
+        session={'member':'a','tail':'old-flow-tail','last':0,'seen':[]}
+        self.p._flows['salon']=session
+        await self.p._refill_flow('salon',session)
+        self.assertNotIn('salon',self.p._flows)
+        self.p.mass.player_queues.play_media.assert_not_called()
+    async def test_catalog_shortcut_alias_keeps_account_and_exact_id(self):
+        a,b=self.p.providers()
+        async def api(route,**kw):
+            if route=='playlists':return []
+            if route=='playlists/8074581462/tracks':return [{'ID':'88','Name':'Track'}]
+            raise AssertionError('Unexpected search or playlist: '+route)
+        a._api=AsyncMock(side_effect=api)
+        b._api=AsyncMock(return_value=[])
+        await self.p.preset_save('Pop Rock 2010','playlist',['Alice'],playlist_id='8074581462',allow_catalog=True,source_title='2010s Pop Rock')
+        for name in ['Pop Rock 2010','2010s Pop Rock']:
+            result=await self.p.playlist_play('Alice',name,preview=True)
+            self.assertEqual(result['playlist_id'],'8074581462')
+            self.assertEqual(result['provider_instance'],'opendeezer_home--a')
+            self.assertEqual(result['source'],'saved_shortcut')
+        async def missing(route,**kw):return [] if route=='playlists' else {'Playlists':[]}
+        b._api=AsyncMock(side_effect=missing)
+        with self.assertRaises(Exception):await self.p.playlist_play('Bob','Pop Rock 2010',preview=True)
+        self.p.mass.player_queues.play_media.assert_not_called()
+        await self.p.playlist_play('Alice','Pop Rock 2010','Salon')
+        self.assertEqual(self.p.mass.player_queues.play_media.call_args.args[1],['opendeezer_home--a://track/88'])
+    async def test_catalog_shortcut_rejects_invalid_or_empty_target(self):
+        a=self.p.providers()[0];a._api=AsyncMock(return_value=[])
+        for ident in ['../profiles','123']:
+            with self.assertRaises(Exception):
+                await self.p.preset_save('Invalid','playlist',['Alice'],playlist_id=ident,allow_catalog=True)
+        self.assertEqual(self.p._state['presets'],{})
+    async def test_flow_refill_uses_same_account_and_preserves_queue(self):
+        q=NS(state='playing',items=2,current_index=0)
+        self.p.mass.player_queues.get=lambda _:q
+        self.p.mass.player_queues.items=lambda *a,**k:[NS(queue_item_id='flow-tail')]
+        a,b=self.p.providers();a._api=AsyncMock(return_value=[{'ID':'1'},{'ID':'2'},{'ID':'3'}]);b._api=AsyncMock()
+        self.p._state['preferences']['a']={'2':'ban'}
+        session={'member':'a','tail':'flow-tail','last':0,'seen':['1']};self.p._flows['salon']=session
+        await self.p._refill_flow('salon',session)
+        call=self.p.mass.player_queues.play_media.call_args
+        self.assertEqual(call.args[1],['opendeezer_home--a://track/3'])
+        self.assertEqual(call.kwargs['option'].value,'add');b._api.assert_not_called()

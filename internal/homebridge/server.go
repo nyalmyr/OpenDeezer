@@ -23,6 +23,7 @@ type Client interface {
 	Login() error
 	Account() deezer.Account
 	Favorites() ([]deezer.Track, error)
+	Flow() ([]deezer.Track, error)
 	Playlists() ([]deezer.Playlist, error)
 	PlaylistTracks(string) ([]deezer.Track, error)
 	Track(string) (deezer.Track, error)
@@ -95,7 +96,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/healthz" && r.Method == http.MethodGet {
-		jsonReply(w, 200, map[string]string{"status": "ok", "version": "0.3.0"})
+		jsonReply(w, 200, map[string]string{"status": "ok", "version": "0.4.0"})
 		return
 	}
 	raw := r.Header.Get("Authorization")
@@ -150,6 +151,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		data, err = p.Client.Playlists()
 	case len(parts) == 2 && parts[1] == "favorites":
 		data, err = p.Client.Favorites()
+	case len(parts) == 2 && parts[1] == "flow":
+		data, err = p.Client.Flow()
 	case len(parts) == 2 && parts[1] == "search":
 		q := strings.TrimSpace(r.URL.Query().Get("q"))
 		if q == "" || len(q) > 240 {

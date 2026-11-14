@@ -1,4 +1,4 @@
-# OpenDeezer Home & Famille 0.3.0
+# OpenDeezer Home & Famille 0.4.0
 
 Community extension for **Music Assistant 2.10.9** and Home Assistant, built on [OpenDeezer](https://github.com/Cycl0o0/OpenDeezer). Experimental; not an official Music Assistant or Deezer integration. AGPL-3.0, preserving the upstream license and attribution.
 
@@ -11,8 +11,23 @@ Community extension for **Music Assistant 2.10.9** and Home Assistant, built on 
 - Native Music Assistant playback, queue transfer and compatible speaker grouping. Resume the previous personal queue if still identifiable, otherwise restart the saved selection.
 - Native Music Assistant **Party** mode: temporary guest access, track proposals and boosts, rate limits and duplicate prevention. Guest access stays off until explicitly opened.
 - Bounded metadata caching; timing diagnostics distinguish metadata preparation from an audible playback measurement.
-- Optional **Chrome/Edge companion** to send the logged-in Deezer ARL to your own server without copying it. Explicit pairing, ten-minute ticket, single use. See [installation](browser-companion/README.md). The unpacked extension is not published in a browser store; real browser enrollment still needs validation.
-- Six Home Assistant scripts for profiles, mixed playback, personal resume, feedback, explanation and queue transfer. No paid LLM calls, automatic voice identification, parental filtering or home-scene automation in this extension.
+- No browser extension is required by the current interface. Enrollment uses the native MA provider form and a privately entered ARL. A regular web popup cannot read a Deezer session cookie; see ACCOUNT_SETUP.md.
+- Native HA scripts for mixes, feedback, transfer, real personal Flow, strict account-specific playlists and saved shortcuts. The dashboard bridge script is not exposed to Assist. No paid LLM is required by this extension.
+
+## New in 0.4
+
+- A shared tablet-oriented card runs directly inside Home Assistant or the MA family page. Transport, volume, per-person Flow, library browsing and editable shortcut buttons share one interface.
+- Presets can contain a stored weighted mix, a live Deezer playlist reference or personal Flow. Playlist references refresh their contents at playback; mix presets preserve a local selection, independent of temporary previews. These do not create playlists in the Deezer account.
+- Named-person playback resolves only that account. A saved playlist shortcut may define a local alias and a source title; ambiguous searches fail without falling back to another family member. Explicit catalog IDs can be saved after access is checked.
+- Flow requests actual Deezer recommendations and refills near the end of its own queue. Replacing or changing the queue cancels refill; an error stops refill rather than retrying indefinitely. Runtime refill tracking does not survive an MA restart.
+
+### Install the Home Assistant card
+
+Copy `music_assistant_provider/opendeezer_family/web/family-card.js` to `/config/www/opendeezer/family-card.js` and register `/local/opendeezer/family-card.js?v=0.4.0.2` as a module resource. Add a panel view with `type: custom:opendeezer-family-card`; set `default_player` to a real MA player ID and `player_entities` to a mapping of MA IDs to HA media_player entities. The card calls `script.opendeezer_interface`; the MA token stays on the HA server. Reload the browser after updating.
+
+An optional second HA panel view can embed the existing MA URL as an iframe for full library/settings access. Its session is separate from HA. LAN HTTP was verified; remote HTTPS requires a compatible HTTPS endpoint to avoid mixed content. The primary card needs no direct browser connection to MA.
+
+The simplified card currently exposes daily playback, shortcuts and account status. Advanced feedback, explanation, transfer and Party operations remain available through the existing API/scripts; the new card does not claim to expose every advanced control. Account enrollment/reconnection remains in the native provider settings.
 
 ## Limits that matter
 
@@ -29,8 +44,8 @@ mkdir -p build-home
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o build-home/opendeezer-home ./cmd/opendeezer-home
 cp deploy/Dockerfile.bridge deploy/Dockerfile.music-assistant build-home/
 cp -R music_assistant_provider build-home/
-docker build -f build-home/Dockerfile.bridge -t local/opendeezer-home:0.3.0 build-home
-docker build -f build-home/Dockerfile.music-assistant -t local/music-assistant-opendeezer:0.3.0 build-home
+docker build -f build-home/Dockerfile.bridge -t local/opendeezer-home:0.4.0 build-home
+docker build -f build-home/Dockerfile.music-assistant -t local/music-assistant-opendeezer:0.4.0 build-home
 ```
 
 For ARM64, select `GOARCH=arm64` and a compatible base image. Only AMD64 has been deployed for this version.
@@ -41,7 +56,7 @@ For ARM64, select `GOARCH=arm64` and a compatible base image. Only AMD64 has bee
 4. Adapt `deploy/compose.example.yaml` to your existing paths and stack. Both containers use host networking on the same trusted Linux host, so the bridge stays on loopback8731. No bridge port is published. Both read the admin secret; only the bridge writes managed profiles.
 5. Recreate **only these two services** with the new images. A full-stack redeploy is unnecessary. Keep old images and backups for rollback.
 6. In Music Assistant, add **OpenDeezer Home** under music sources for the initial account (the enrollment flow recognizes the existing profile), then **OpenDeezer Famille** under plugins. The latter exposes `/opendeezer-family/` on the existing MA web port. Sign in with an existing MA administrator to manage accounts.
-7. Add further members with the native form or optional browser companion. The original static config stays compatible; managed reconnect/revocation overrides take precedence.
+7. Add further members with the native provider form. The original static config stays compatible; managed reconnect/revocation overrides take precedence.
 
 The page itself is public static HTML, but all family data and commands require MA authentication and scopes. Account management requires `config.providers.write`. Pair submission alone is unauthenticated but requires an unguessable, short-lived, single-use ticket previously created by an administrator. Only an ARL is sent to the private bridge, not a Deezer password. Use HTTPS if traffic crosses an untrusted network. This is not a hosted multi-tenant service: MA users in the same household can access household mix/preferences data according to their MA role.
 
@@ -51,7 +66,7 @@ Use the native `rest_command` integration and scripts in `deploy/home_assistant/
 
 1. Create a dedicated **non-administrator** MA user for voice control and a long-lived token for it. Store `Bearer <token>` as `opendeezer_voice_authorization` in HA `secrets.yaml`. Tokens expire according to MA policy (one year in tested MA); renew if authentication stops working.
 2. Install `rest_commands.yaml` as `/config/opendeezer_rest_commands.yaml`; merge `rest_command: !include opendeezer_rest_commands.yaml` into your configuration without overwriting existing commands. Replace localhost8095 if MA is on another host.
-3. Import each entry of `scripts.json` using HA's script configuration API/editor. Preserve existing scripts. Expose the six new scripts to Assist; a conversational agent with tool support is needed for natural free-form requests with fields.
+3. Import each entry of `scripts.json` using HA's script configuration API/editor. Preserve existing scripts. Expose the voice-facing scripts to Assist, excluding opendeezer_interface; a conversational agent with tool support is needed for natural free-form requests with fields.
 4. Validate HA configuration. On first installation, HA must be restarted to load `rest_command`; later edits can use `rest_command.reload`.
 5. Instruct the voice agent to call the mixed-playback script once with the named participants; no extra search is required. Use the profile-list script only for ambiguity. Visible playback actions need no spoken confirmation after success. **If the result contains `error` or `success:false`, explain the error instead.** Never infer a person's identity from voice.
 

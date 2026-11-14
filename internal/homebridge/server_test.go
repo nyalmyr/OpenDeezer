@@ -33,6 +33,7 @@ func (c *fakeClient) Playlists() ([]deezer.Playlist, error) {
 	return []deezer.Playlist{{ID: "2", Name: c.name}}, c.err
 }
 func (c *fakeClient) PlaylistTracks(string) ([]deezer.Track, error) { return c.Favorites() }
+func (c *fakeClient) Flow() ([]deezer.Track, error) { return c.Favorites() }
 func (c *fakeClient) Track(id string) (deezer.Track, error) {
 	return deezer.Track{ID: id, Name: c.name, DurationMS: 180000}, c.err
 }

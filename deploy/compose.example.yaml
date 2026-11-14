@@ -1,7 +1,7 @@
 # Merge into your existing stack and preserve its MA data volume.
 services:
   opendeezer-home:
-    image: local/opendeezer-home:0.3.0
+    image: local/opendeezer-home:0.4.0
     restart: unless-stopped
     network_mode: host
     read_only: true
@@ -23,7 +23,7 @@ services:
       timeout: 3s
       retries: 3
   music-assistant:
-    image: local/music-assistant-opendeezer:0.3.0
+    image: local/music-assistant-opendeezer:0.4.0
     restart: unless-stopped
     network_mode: host
     environment:

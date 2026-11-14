@@ -17,7 +17,7 @@ from music_assistant_models.enums import QueueOption
 from music_assistant_models.errors import InvalidDataError
 from .mixer import build_mix, normalize
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 
 async def setup(mass, manifest, config):
@@ -36,10 +36,12 @@ class FamilyProvider(PluginProvider):
         self._catalog_lock = asyncio.Lock()
         self._metrics = deque(maxlen=50)
         self._pairs = {}
+        self._flows = {}
         self._pair_attempts = deque(maxlen=40)
         self._state = {"preferences": {}, "mixes": {}, "last_mix": {}}
         if self._path.exists():
             self._state = json.loads(await asyncio.to_thread(self._path.read_text))
+        self._state.setdefault("presets", {})
         self._handles = []
         for name, method, scope in [
             ("status", self.status, Scope.PROVIDERS_READ),
@@ -47,6 +49,13 @@ class FamilyProvider(PluginProvider):
             ("selection", self.selection, Scope.LIBRARY_READ),
             ("play", self.play, Scope.QUEUES_CONTROL),
             ("start", self.start_mix, Scope.QUEUES_CONTROL),
+            ("flow", self.flow, Scope.QUEUES_CONTROL),
+            ("playlists", self.playlists, Scope.LIBRARY_READ),
+            ("playlist_play", self.playlist_play, Scope.QUEUES_CONTROL),
+            ("preset_save", self.preset_save, Scope.LIBRARY_WRITE),
+            ("preset_delete", self.preset_delete, Scope.LIBRARY_WRITE),
+            ("preset_play", self.preset_play, Scope.QUEUES_CONTROL),
+            ("control", self.control, Scope.QUEUES_CONTROL),
             ("resume", self.resume_member, Scope.QUEUES_CONTROL),
             ("feedback", self.feedback, Scope.LIBRARY_WRITE),
             ("explain", self.explain, Scope.LIBRARY_READ),
@@ -64,8 +73,13 @@ class FamilyProvider(PluginProvider):
         self._handles.append(self.mass.webserver.register_dynamic_route("/opendeezer-family/*", self.web_handler))
         self._warm_task = asyncio.create_task(self._warm())
         self._pair_cleanup_task = asyncio.create_task(self._cleanup_pairs())
+        self._flow_task = asyncio.create_task(self._watch_flows())
 
     async def unload(self, is_removed=False):
+        if hasattr(self, "_flow_task"):
+            self._flow_task.cancel()
+            try: await self._flow_task
+            except asyncio.CancelledError: pass
         if hasattr(self, "_pair_cleanup_task"):
             self._pair_cleanup_task.cancel()
             try: await self._pair_cleanup_task
@@ -81,6 +95,42 @@ class FamilyProvider(PluginProvider):
         while True:
             await asyncio.sleep(15)
             self._pairs = {k:v for k,v in self._pairs.items() if v["expires"] > time.monotonic()}
+
+    async def _watch_flows(self):
+        while True:
+            await asyncio.sleep(8)
+            for queue_id, session in list(self._flows.items()):
+                try: await self._refill_flow(queue_id, session)
+                except Exception:
+                    self._flows.pop(queue_id, None)
+                    self._metrics.append({"operation": "flow_refill", "ok": False})
+
+    def _flow_queue_matches(self, queue_id, session):
+        q = self.mass.player_queues.get(queue_id)
+        if not q or str(q.state) not in ("playing", "paused"): return False
+        items = self.mass.player_queues.items(queue_id, limit=1, offset=max(q.items-1,0))
+        return bool(items and items[-1].queue_item_id == session["tail"])
+
+    async def _refill_flow(self, queue_id, session):
+        # Queue-item IDs distinguish this exact Flow from a user replacement or append.
+        if self._flows.get(queue_id) is not session: return
+        if not self._flow_queue_matches(queue_id, session):
+            self._flows.pop(queue_id, None); return
+        q = self.mass.player_queues.get(queue_id)
+        if str(q.state) != "playing" or q.items - (q.current_index or 0) > 3: return
+        if time.monotonic() - session["last"] < 30: return
+        p = self.member(session["member"])
+        raw = await p._api("flow") or []
+        forbidden = set(session["seen"]) | {tid for tid,rating in self._state["preferences"].get(p.profile_id,{}).items() if rating == "ban"}
+        tracks = list({str(t["ID"]):t for t in raw if str(t["ID"]) not in forbidden}.values())[:100]
+        if not tracks: raise InvalidDataError("Flow sans nouveaux titres")
+        if self._flows.get(queue_id) is not session or not self._flow_queue_matches(queue_id, session): return
+        if str(self.mass.player_queues.get(queue_id).state) != "playing": return
+        await self.mass.player_queues.play_media(queue_id,[f"{p.instance_id}://track/{t['ID']}" for t in tracks],option=QueueOption.ADD)
+        q = self.mass.player_queues.get(queue_id)
+        tail = self.mass.player_queues.items(queue_id,limit=1,offset=q.items-1)[0]
+        session.update(tail=tail.queue_item_id,last=time.monotonic(),seen=(session["seen"]+[str(t["ID"]) for t in tracks])[-300:])
+        self._metrics.append({"operation":"flow_refill","ok":True,"tracks":len(tracks)})
 
     def providers(self):
         return [p for p in self.mass.providers if p.domain == "opendeezer_home" and p.available]
@@ -158,8 +208,138 @@ class FamilyProvider(PluginProvider):
             "instance_id": p.instance_id, "cached_tracks": len(self._catalogs.get(p.profile_id, (0, []))[1]),
             "preferences": len(self._state["preferences"].get(p.profile_id, {}))} for p in self.providers()],
             "accounts": accounts,
+            "presets": [{**{k:v for k,v in p.items() if k != "tracks"}, "track_count": len(p["tracks"])} for p in self._state["presets"].values()],
             "players": [{"id": p.player_id, "label": p.display_name} for p in self.mass.players.all_players(False, False) if p.available],
             "mixes": [{k: v for k, v in mix.items() if k != "tracks"} for mix in self._state["mixes"].values()]}
+
+    async def playlists(self, member: str):
+        p = self.member(member)
+        return {"member": p.profile_id, "playlists": [{"id": str(x["ID"]), "name": x["Name"]}
+            for x in (await p._api("playlists") or [])]}
+
+    async def flow(self, member: str, player: str = "", preview: bool = False):
+        p = self.member(member)
+        queue_id = self.player(player) if not preview else None
+        raw = await p._api("flow") or []
+        banned = {tid for tid, rating in self._state["preferences"].get(p.profile_id, {}).items() if rating == "ban"}
+        tracks = list({str(t["ID"]): t for t in raw if str(t["ID"]) not in banned}.values())[:100]
+        if not tracks: raise InvalidDataError("Deezer ne renvoie aucun titre Flow pour ce compte. Aucun autre mélange n'a été lancé.")
+        if preview:
+            return {"source": "deezer_flow", "member": p.profile_label, "tracks": len(tracks),
+                    "titles": [t["Name"] for t in tracks[:5]], "continuous": True}
+        await self.mass.player_queues.play_media(queue_id,
+            [f"{p.instance_id}://track/{t['ID']}" for t in tracks], option=QueueOption.REPLACE)
+        q = self.mass.player_queues.get(queue_id)
+        if q:
+            tail = self.mass.player_queues.items(queue_id,limit=1,offset=q.items-1)
+            if tail: self._flows[queue_id]={"member":p.profile_id,"tail":tail[0].queue_item_id,"last":time.monotonic(),"seen":[str(t["ID"]) for t in tracks]}
+        return {"requested": True, "source": "deezer_flow", "tracks": len(tracks), "speech": "", "continuous": queue_id in self._flows}
+
+    async def playlist_play(self, member: str, name: str, player: str = "", preview: bool = False):
+        """Resolve within the explicitly named account; never use another instance's results."""
+        p = self.member(member)
+        queue_id = self.player(player) if not preview else None
+        import re
+        key = lambda text: re.sub(r"[^\w]+", " ", normalize(text)).strip()
+        wanted = key(name)
+        if not wanted or len(name) > 160: raise InvalidDataError("Indiquez le nom de la playlist.")
+        saved = [x for x in self._state["presets"].values() if x["kind"] == "playlist" and x["members"] == [p.profile_id]
+                 and wanted in {key(x["name"]), key(x.get("source_title", ""))}]
+        if len(saved) > 1: raise InvalidDataError("Plusieurs raccourcis correspondent à cette demande.")
+        matches = [{"ID":saved[0]["playlist_id"],"Name":saved[0].get("source_title") or saved[0]["name"]}] if saved else []
+        source = "saved_shortcut" if saved else "personal_library"
+        if not matches:
+            candidates = await p._api("playlists") or []
+            matches = [x for x in candidates if key(x["Name"]) == wanted]
+        if not matches:
+            search = await p._api("search", params={"q": name})
+            candidates = search.get("Playlists") or []
+            matches = [x for x in candidates if key(x["Name"]) == wanted]
+            source = "deezer_catalog"
+        if len(matches) != 1:
+            raise InvalidDataError("Playlist introuvable ou ambiguë pour " + p.profile_label + ". Précisez son titre exact ou utilisez un raccourci. Aucun autre compte n'a été utilisé.")
+        chosen = matches[0]
+        result = {"member": p.profile_label, "provider_instance": p.instance_id, "playlist": chosen["Name"], "playlist_id": str(chosen["ID"]), "source": source}
+        if preview: return result
+        raw = await p._api(f"playlists/{chosen['ID']}/tracks") or []
+        banned = {tid for tid,rating in self._state["preferences"].get(p.profile_id,{}).items() if rating == "ban"}
+        uris = [f"{p.instance_id}://track/{t['ID']}" for t in raw[:1000] if str(t["ID"]) not in banned]
+        if not uris: raise InvalidDataError("Cette playlist est vide ou indisponible.")
+        await self.mass.player_queues.play_media(queue_id, uris, option=QueueOption.REPLACE)
+        return {**result, "requested": True, "tracks": len(uris), "speech": ""}
+
+    async def preset_save(self, name: str, kind: str, members: list[str], player: str = "",
+                          minutes: int = 60, mood: str = "", end_mood: str = "",
+                          weights: dict[str, float] | None = None, playlist_id: str = "", preset_id: str = "",
+                          allow_catalog: bool = False, source_title: str = ""):
+        name = name.strip()
+        if not 1 <= len(name) <= 60: raise InvalidDataError("Donnez un nom de 1 à 60 caractères au raccourci.")
+        if kind not in ("mix", "playlist", "flow"): raise InvalidDataError("Source musicale inconnue.")
+        if not isinstance(members, list) or not 1 <= len(members) <= 20: raise InvalidDataError("Choisissez au moins une personne.")
+        people = [self.member(m) for m in members]
+        ids = [p.profile_id for p in people]
+        if len(set(ids)) != len(ids): raise InvalidDataError("Un membre apparaît deux fois.")
+        if kind != "mix" and len(people) != 1: raise InvalidDataError("Choisissez un seul compte pour une playlist ou un Flow.")
+        destination = self.player(player) if player else ""
+        if preset_id and preset_id not in self._state["presets"]: raise InvalidDataError("Raccourci introuvable.")
+        mix = None
+        if kind == "playlist":
+            lists = (await self.playlists(members[0]))["playlists"]
+            if playlist_id not in {x["id"] for x in lists}:
+                if not allow_catalog or not playlist_id.isdecimal() or len(playlist_id)>20:
+                    raise InvalidDataError("Choisissez une playlist de ce compte ou un lien Deezer explicite.")
+                if not await people[0]._api(f"playlists/{playlist_id}/tracks"):
+                    raise InvalidDataError("La playlist indiquée est vide ou inaccessible pour ce compte.")
+        if kind == "mix":
+            mix = await self.compose(members, weights, minutes, mood, end_mood, name)
+        async with self._lock:
+            if any(normalize(v["name"]) == normalize(name) and k != preset_id for k,v in self._state["presets"].items()):
+                raise InvalidDataError("Ce nom est déjà utilisé. Modifiez le raccourci existant.")
+            if not preset_id and len(self._state["presets"]) >= 60: raise InvalidDataError("Maximum 60 raccourcis.")
+            pid = preset_id or secrets.token_hex(8)
+            item = {"id": pid, "name": name, "kind": kind, "members": ids, "player": destination,
+                "minutes": minutes, "mood": mood[:80], "end_mood": end_mood[:80], "weights": weights or {},
+                "playlist_id": playlist_id, "tracks": copy.deepcopy(mix["tracks"]) if mix else [],
+                "allow_catalog": allow_catalog, "source_title": source_title.strip()[:160],
+                "warnings": mix["warnings"] if mix else [], "created": int(time.time())}
+            self._state["presets"][pid] = item
+            await self._save()
+        return {"saved": True, "id": pid, "tracks": len(item["tracks"]), "warnings": item["warnings"]}
+
+    async def preset_delete(self, preset_id: str):
+        async with self._lock:
+            if preset_id not in self._state["presets"]: raise InvalidDataError("Raccourci introuvable.")
+            del self._state["presets"][preset_id]
+            await self._save()
+        return {"deleted": True}
+
+    async def preset_play(self, preset: str, player: str = ""):
+        matches = [p for p in self._state["presets"].values() if normalize(preset) in {normalize(p["id"]), normalize(p["name"])}]
+        if len(matches) != 1: raise InvalidDataError("Raccourci absent ou ambigu.")
+        p = matches[0]
+        people = [self.member(m) for m in p["members"]]
+        queue_id = self.player(player or p["player"])
+        if p["kind"] == "flow": return await self.flow(people[0].profile_id, queue_id)
+        if p["kind"] == "playlist":
+            raw = await people[0]._api(f"playlists/{p['playlist_id']}/tracks") or []
+            tracks = [{"id": str(t["ID"]), "uri": f"{people[0].instance_id}://track/{t['ID']}"} for t in raw[:1000]]
+        else: tracks = p["tracks"]
+        banned = {tid for person in people for tid,rating in self._state["preferences"].get(person.profile_id,{}).items() if rating == "ban"}
+        uris = [t["uri"] for t in tracks if t["id"] not in banned]
+        if not uris: raise InvalidDataError("Cette sélection ne contient aucun titre disponible.")
+        await self.mass.player_queues.play_media(queue_id, uris, option=QueueOption.REPLACE)
+        return {"requested": True, "tracks": len(uris), "speech": ""}
+
+    async def control(self, player: str, action: str, volume: int = 20):
+        pid = self.player(player)
+        if action == "stop": self._flows.pop(pid, None)
+        if action in ("play", "pause", "stop", "next", "previous"):
+            await getattr(self.mass.player_queues, action)(pid)
+        elif action == "volume":
+            if not 0 <= volume <= 100: raise InvalidDataError("Volume : 0 à 100 %.")
+            await self.mass.players.cmd_volume_set(pid, volume)
+        else: raise InvalidDataError("Commande inconnue.")
+        return {"requested": True, "speech": ""}
 
     async def compose(self, members: list[str], weights: dict[str, float] | None = None,
                       minutes: int = 60, mood: str = "", end_mood: str = "", name: str = "Mix familial"):
@@ -331,6 +511,7 @@ class FamilyProvider(PluginProvider):
         async with self._lock:
             self._state["preferences"].pop(pid, None); self._state["last_mix"].pop(pid, None)
             self._state["mixes"] = {k:v for k,v in self._state["mixes"].items() if pid not in v["members"]}
+            self._state["presets"] = {k:v for k,v in self._state["presets"].items() if pid not in v["members"]}
             await self._save()
         self._catalogs.pop(pid, None)
         return {"removed": True}
@@ -383,9 +564,9 @@ class FamilyProvider(PluginProvider):
             if not isinstance(arl,str) or not 32 <= len(arl) <= 1024 or any(c.isspace() for c in arl): return web.Response(status=400, headers=cors)
             pair["arl"] = arl
             return web.json_response({"received": True}, headers={**cors,"Cache-Control":"no-store"})
-        if request.method != "GET" or suffix not in ("", "index.html", "app.js", "style.css"):
+        if request.method != "GET" or suffix not in ("", "index.html", "app.js", "style.css", "family-card.js"):
             return web.Response(status=404)
         name = suffix or "index.html"
         text = await asyncio.to_thread((Path(__file__).parent / "web" / name).read_text)
         return web.Response(text=text, content_type={"html":"text/html","js":"text/javascript","css":"text/css"}[name.rsplit('.',1)[1]],
-            headers={"Cache-Control":"no-store","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff", "Content-Security-Policy":"default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'self'"})
+            headers={"Cache-Control":"no-store","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff", "Content-Security-Policy":"default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'self'"})

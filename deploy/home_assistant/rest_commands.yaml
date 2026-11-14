@@ -8,4 +8,4 @@ opendeezer_family:
   headers:
     Authorization: !secret opendeezer_voice_authorization
   payload: >-
-    {{ {"command": "opendeezer/family/" ~ (operation if operation in ['status','start','resume','feedback','explain','transfer','join'] else 'status'), "args": parameters | default({})} | to_json }}
+    {{ {"command": "opendeezer/family/" ~ (operation if operation in ['status','start','resume','feedback','explain','transfer','join','flow','playlist_play','playlists','preset_save','preset_delete','preset_play','control'] else 'status'), "args": parameters | default({})} | to_json }}

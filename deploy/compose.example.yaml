@@ -1,0 +1,33 @@
+# Merge into your existing stack and preserve its MA data volume.
+services:
+  opendeezer-home:
+    image: local/opendeezer-home:0.3.0
+    restart: unless-stopped
+    network_mode: host
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    cpus: 0.5
+    environment:
+      OPENDEEZER_ADMIN_TOKEN_FILE: /run/secrets/opendeezer-admin
+      OPENDEEZER_MANAGED_PROFILES_FILE: /managed/profiles.json
+    volumes:
+      - /srv/opendeezer/config:/config:ro
+      - /srv/opendeezer/managed:/managed:rw
+      - /srv/opendeezer/admin/admin.token:/run/secrets/opendeezer-admin:ro
+    healthcheck:
+      test: [CMD, /opendeezer-home, -healthcheck]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+  music-assistant:
+    image: local/music-assistant-opendeezer:0.3.0
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      OPENDEEZER_ADMIN_TOKEN_FILE: /run/secrets/opendeezer-admin
+    volumes:
+      - /srv/music-assistant/data:/data
+      - /srv/opendeezer/admin/admin.token:/run/secrets/opendeezer-admin:ro

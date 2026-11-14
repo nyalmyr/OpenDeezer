@@ -3,3 +3,15 @@
 /opendeezer.exe
 *.test
 hs_err_pid*.log
+
+# Home bridge: build products and private account material never belong in Git.
+/build-home/
+*.arl
+*.token
+/config.json
+__pycache__/
+
+# Private enrollment state
+/managed/
+/admin/
+/profiles.json

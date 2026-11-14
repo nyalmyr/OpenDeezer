@@ -1,0 +1,416 @@
+{
+  "opendeezer_profils": {
+    "alias": "Musique familiale — comptes disponibles",
+    "description": "Consulter les personnes et lecteurs disponibles avant une demande ambiguë. Lecture seule.",
+    "mode": "queued",
+    "max": 4,
+    "fields": {},
+    "sequence": [
+      {
+        "action": "rest_command.opendeezer_family",
+        "data": {
+          "operation": "status",
+          "parameters": {}
+        },
+        "response_variable": "family_reply"
+      },
+      {
+        "if": [
+          {
+            "condition": "template",
+            "value_template": "{{ family_reply.status | int != 200 }}"
+          }
+        ],
+        "then": [
+          {
+            "variables": {
+              "failure": {
+                "success": false,
+                "error": "{{ family_reply.content.get('message', family_reply.content.get('error', 'Service musical indisponible')) if family_reply.content is mapping else family_reply.content | string | truncate(300) }}"
+              }
+            }
+          },
+          {
+            "stop": "Échec de la demande musicale",
+            "response_variable": "failure"
+          }
+        ]
+      },
+      {
+        "variables": {
+          "result": "{{ family_reply.content }}"
+        }
+      },
+      {
+        "stop": "Action musicale terminée",
+        "response_variable": "result"
+      }
+    ]
+  },
+  "opendeezer_mix_familial": {
+    "alias": "Musique familiale — mélanger nos goûts",
+    "description": "Créer et lancer UNE sélection musicale mélangeant les goûts des personnes explicitement citées. Exemple : mélange les goûts de Alice et Bob pour un repas. Respecter la pièce. Pas de confirmation vocale après réussite ; annoncer une erreur si échec. Ne pas identifier une personne à sa voix.",
+    "mode": "queued",
+    "max": 4,
+    "fields": {
+      "membres": {
+        "description": "Liste des prénoms explicitement demandés ; ne pas inventer un membre.",
+        "required": true,
+        "selector": {
+          "select": {
+            "multiple": true,
+            "custom_value": true,
+            "options": []
+          }
+        }
+      },
+      "lecteur": {
+        "description": "Pièce ou groupe demandé, par exemple salon ou Partout. Ne pas choisir une autre pièce.",
+        "required": false,
+        "selector": {
+          "text": {}
+        },
+        "default": "salon"
+      },
+      "minutes": {
+        "description": "Durée en minutes.",
+        "required": false,
+        "selector": {
+          "number": {
+            "min": 5,
+            "max": 480,
+            "mode": "box"
+          }
+        },
+        "default": 60
+      },
+      "ambiance": {
+        "description": "Ambiance souhaitée : chill, festif, disney, rock ou vide.",
+        "required": false,
+        "selector": {
+          "text": {}
+        },
+        "default": ""
+      },
+      "fin_ambiance": {
+        "description": "Ambiance pour la seconde moitié, sinon vide.",
+        "required": false,
+        "selector": {
+          "text": {}
+        },
+        "default": ""
+      },
+      "poids": {
+        "description": "Poids par prénom, uniquement si demandé ; 1 par défaut, 2 pour deux fois plus.",
+        "required": false,
+        "selector": {
+          "object": {}
+        },
+        "default": {}
+      }
+    },
+    "sequence": [
+      {
+        "action": "rest_command.opendeezer_family",
+        "data": {
+          "operation": "start",
+          "parameters": "{{ {'members': membres, 'player': lecteur | default('salon', true), 'minutes': minutes | default(60) | int, 'mood': ambiance | default('', true), 'end_mood': fin_ambiance | default('', true), 'weights': poids | default({})} }}"
+        },
+        "response_variable": "family_reply"
+      },
+      {
+        "if": [
+          {
+            "condition": "template",
+            "value_template": "{{ family_reply.status | int != 200 }}"
+          }
+        ],
+        "then": [
+          {
+            "variables": {
+              "failure": {
+                "success": false,
+                "error": "{{ family_reply.content.get('message', family_reply.content.get('error', 'Service musical indisponible')) if family_reply.content is mapping else family_reply.content | string | truncate(300) }}"
+              }
+            }
+          },
+          {
+            "stop": "Échec de la demande musicale",
+            "response_variable": "failure"
+          }
+        ]
+      },
+      {
+        "variables": {
+          "result": "{{ family_reply.content }}"
+        }
+      },
+      {
+        "stop": "Action musicale terminée",
+        "response_variable": "result"
+      }
+    ]
+  },
+  "opendeezer_reprendre": {
+    "alias": "Musique familiale — reprendre pour une personne",
+    "description": "Reprendre la musique du membre explicitement cité, sur le lecteur demandé. Pas de confirmation vocale après réussite.",
+    "mode": "queued",
+    "max": 4,
+    "fields": {
+      "membre": {
+        "description": "Prénom du membre demandé.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      },
+      "lecteur": {
+        "description": "Pièce ou groupe demandé, par exemple salon ou Partout. Ne pas choisir une autre pièce.",
+        "required": false,
+        "selector": {
+          "text": {}
+        },
+        "default": "salon"
+      }
+    },
+    "sequence": [
+      {
+        "action": "rest_command.opendeezer_family",
+        "data": {
+          "operation": "resume",
+          "parameters": "{{ {'member': membre, 'player': lecteur | default('salon', true)} }}"
+        },
+        "response_variable": "family_reply"
+      },
+      {
+        "if": [
+          {
+            "condition": "template",
+            "value_template": "{{ family_reply.status | int != 200 }}"
+          }
+        ],
+        "then": [
+          {
+            "variables": {
+              "failure": {
+                "success": false,
+                "error": "{{ family_reply.content.get('message', family_reply.content.get('error', 'Service musical indisponible')) if family_reply.content is mapping else family_reply.content | string | truncate(300) }}"
+              }
+            }
+          },
+          {
+            "stop": "Échec de la demande musicale",
+            "response_variable": "failure"
+          }
+        ]
+      },
+      {
+        "variables": {
+          "result": "{{ family_reply.content }}"
+        }
+      },
+      {
+        "stop": "Action musicale terminée",
+        "response_variable": "result"
+      }
+    ]
+  },
+  "opendeezer_avis": {
+    "alias": "Musique familiale — mémoriser un goût",
+    "description": "Mémoriser un avis LOCAL pour la personne explicitement citée sur le morceau en cours. Ne modifie pas Deezer. Ne pas deviner qui parle. Demander le prénom si inconnu.",
+    "mode": "queued",
+    "max": 4,
+    "fields": {
+      "membre": {
+        "description": "Prénom du membre concerné.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      },
+      "avis": {
+        "description": "like=aimer, dislike=moins souvent, ban=exclure, neutral=effacer l'avis.",
+        "required": true,
+        "selector": {
+          "select": {
+            "options": [
+              "like",
+              "dislike",
+              "ban",
+              "neutral"
+            ]
+          }
+        }
+      },
+      "lecteur": {
+        "description": "Pièce ou groupe demandé, par exemple salon ou Partout. Ne pas choisir une autre pièce.",
+        "required": false,
+        "selector": {
+          "text": {}
+        },
+        "default": "salon"
+      }
+    },
+    "sequence": [
+      {
+        "action": "rest_command.opendeezer_family",
+        "data": {
+          "operation": "feedback",
+          "parameters": "{{ {'member': membre, 'rating': avis, 'player': lecteur | default('salon', true)} }}"
+        },
+        "response_variable": "family_reply"
+      },
+      {
+        "if": [
+          {
+            "condition": "template",
+            "value_template": "{{ family_reply.status | int != 200 }}"
+          }
+        ],
+        "then": [
+          {
+            "variables": {
+              "failure": {
+                "success": false,
+                "error": "{{ family_reply.content.get('message', family_reply.content.get('error', 'Service musical indisponible')) if family_reply.content is mapping else family_reply.content | string | truncate(300) }}"
+              }
+            }
+          },
+          {
+            "stop": "Échec de la demande musicale",
+            "response_variable": "failure"
+          }
+        ]
+      },
+      {
+        "variables": {
+          "result": "{{ family_reply.content }}"
+        }
+      },
+      {
+        "stop": "Action musicale terminée",
+        "response_variable": "result"
+      }
+    ]
+  },
+  "opendeezer_expliquer": {
+    "alias": "Musique familiale — expliquer le morceau",
+    "description": "Expliquer brièvement pourquoi le mélange familial a choisi le morceau actuellement joué. Répondre à partir du champ reason renvoyé, sans inventer.",
+    "mode": "queued",
+    "max": 4,
+    "fields": {
+      "lecteur": {
+        "description": "Pièce ou groupe demandé, par exemple salon ou Partout. Ne pas choisir une autre pièce.",
+        "required": false,
+        "selector": {
+          "text": {}
+        },
+        "default": "salon"
+      }
+    },
+    "sequence": [
+      {
+        "action": "rest_command.opendeezer_family",
+        "data": {
+          "operation": "explain",
+          "parameters": "{{ {'player': lecteur | default('salon', true)} }}"
+        },
+        "response_variable": "family_reply"
+      },
+      {
+        "if": [
+          {
+            "condition": "template",
+            "value_template": "{{ family_reply.status | int != 200 }}"
+          }
+        ],
+        "then": [
+          {
+            "variables": {
+              "failure": {
+                "success": false,
+                "error": "{{ family_reply.content.get('message', family_reply.content.get('error', 'Service musical indisponible')) if family_reply.content is mapping else family_reply.content | string | truncate(300) }}"
+              }
+            }
+          },
+          {
+            "stop": "Échec de la demande musicale",
+            "response_variable": "failure"
+          }
+        ]
+      },
+      {
+        "variables": {
+          "result": "{{ family_reply.content }}"
+        }
+      },
+      {
+        "stop": "Action musicale terminée",
+        "response_variable": "result"
+      }
+    ]
+  },
+  "opendeezer_deplacer": {
+    "alias": "Musique familiale — déplacer la musique",
+    "description": "Transférer la file musicale d'une pièce vers une autre, en utilisant Music Assistant. Pas de confirmation vocale après réussite. Une destination sans enceinte est une erreur.",
+    "mode": "queued",
+    "max": 4,
+    "fields": {
+      "source": {
+        "description": "Pièce où la musique joue actuellement.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      },
+      "destination": {
+        "description": "Pièce ou groupe de destination explicitement demandé.",
+        "required": true,
+        "selector": {
+          "text": {}
+        }
+      }
+    },
+    "sequence": [
+      {
+        "action": "rest_command.opendeezer_family",
+        "data": {
+          "operation": "transfer",
+          "parameters": "{{ {'source': source, 'destination': destination} }}"
+        },
+        "response_variable": "family_reply"
+      },
+      {
+        "if": [
+          {
+            "condition": "template",
+            "value_template": "{{ family_reply.status | int != 200 }}"
+          }
+        ],
+        "then": [
+          {
+            "variables": {
+              "failure": {
+                "success": false,
+                "error": "{{ family_reply.content.get('message', family_reply.content.get('error', 'Service musical indisponible')) if family_reply.content is mapping else family_reply.content | string | truncate(300) }}"
+              }
+            }
+          },
+          {
+            "stop": "Échec de la demande musicale",
+            "response_variable": "failure"
+          }
+        ]
+      },
+      {
+        "variables": {
+          "result": "{{ family_reply.content }}"
+        }
+      },
+      {
+        "stop": "Action musicale terminée",
+        "response_variable": "result"
+      }
+    ]
+  }
+}

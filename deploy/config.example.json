@@ -1,0 +1,11 @@
+{
+  "listen": "127.0.0.1:8731",
+  "profiles": [
+    {
+      "id": "alice",
+      "label": "Alice",
+      "arl_file": "/config/alice.arl",
+      "token_file": "/config/alice.token"
+    }
+  ]
+}

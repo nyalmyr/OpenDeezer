@@ -1,0 +1,1 @@
+{"type":"plugin","domain":"opendeezer_family","stage":"alpha","name":"OpenDeezer Famille","description":"Mix familial pondéré, profils, goûts et administration locale. Interface /opendeezer-family/.","codeowners":[],"requirements":[],"multi_instance":false,"credits":["[OpenDeezer](https://github.com/Cycl0o0/OpenDeezer)","[Music Assistant](https://www.music-assistant.io)"]}

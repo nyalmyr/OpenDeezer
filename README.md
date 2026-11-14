@@ -1,3 +1,9 @@
+# Household Music Assistant extension
+
+See [OpenDeezer Home & Famille 0.3.0](README-FAMILY.md) for the multi-account provider, weighted mixes, management UI, browser companion and Home Assistant installation.
+
+---
+
 # OpenDeezer
 
 **An open-source reimplementation of Deezer.** Log in once. The GUIs sign you in

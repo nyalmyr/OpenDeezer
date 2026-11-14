@@ -1,0 +1,11 @@
+{
+  "type": "music",
+  "domain": "opendeezer_home",
+  "stage": "alpha",
+  "name": "OpenDeezer Home",
+  "description": "Personal Deezer profiles through a local OpenDeezer bridge. One instance per household member.",
+  "codeowners": [],
+  "credits": ["[OpenDeezer](https://github.com/Cycl0o0/OpenDeezer)"],
+  "requirements": [],
+  "multi_instance": true
+}

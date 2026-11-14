@@ -1,0 +1,1 @@
+{"manifest_version":3,"name":"OpenDeezer Compagnon","version":"0.3.0","description":"Connecter explicitement votre session Deezer à votre serveur Music Assistant personnel.","permissions":["cookies","activeTab","scripting","storage"],"host_permissions":["https://*.deezer.com/*"],"optional_host_permissions":["http://*/*","https://*/*"],"action":{"default_popup":"popup.html"}}

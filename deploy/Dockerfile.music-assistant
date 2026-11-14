@@ -1,0 +1,4 @@
+ARG MA_BASE=ghcr.io/music-assistant/server@sha256:4ac0d5844363fbbefd6a61251df09d96cd546e05e01b8c1cc1a28803f0935e07
+FROM ${MA_BASE}
+COPY music_assistant_provider/opendeezer_home /app/venv/lib/python3.14/site-packages/music_assistant/providers/opendeezer_home
+COPY music_assistant_provider/opendeezer_family /app/venv/lib/python3.14/site-packages/music_assistant/providers/opendeezer_family

@@ -1,0 +1,11 @@
+# Include under rest_command: !include opendeezer_rest_commands.yaml
+# Secret is a dedicated non-administrator Music Assistant user's token, prefixed with Bearer.
+opendeezer_family:
+  url: http://127.0.0.1:8095/api
+  method: post
+  content_type: application/json
+  timeout: 45
+  headers:
+    Authorization: !secret opendeezer_voice_authorization
+  payload: >-
+    {{ {"command": "opendeezer/family/" ~ (operation if operation in ['status','start','resume','feedback','explain','transfer','join'] else 'status'), "args": parameters | default({})} | to_json }}

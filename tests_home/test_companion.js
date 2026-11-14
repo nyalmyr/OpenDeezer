@@ -1,0 +1,11 @@
+const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
+const source=fs.readFileSync(path.join(__dirname,'../browser-companion/popup.js'),'utf8');
+async function fixture(origin='http://192.168.1.5:8095',expired=false){
+ const nodes=new Map(),calls=[],pair={origin,ticket:'x'.repeat(43),label:'Alice',expires:Date.now()+(expired?-1000:600000)};
+ const context={URL,Date,Error,AbortController,setTimeout,clearTimeout,document:{querySelector:s=>{if(!nodes.has(s))nodes.set(s,{});return nodes.get(s);}},chrome:{storage:{session:{get:async()=>({pair}),set:async x=>calls.push(['store',x]),remove:async()=>calls.push(['clear'])}},permissions:{request:async x=>{calls.push(['permission',x]);return true;},remove:async x=>calls.push(['unpermit',x])},cookies:{get:async x=>{calls.push(['cookie',x]);return {value:'test-only-arl-'+ 'z'.repeat(64)};}},tabs:{create:async x=>calls.push(['tab',x])}},fetch:async(u,o)=>{calls.push(['fetch',u,o]);return {ok:true,status:200};}};
+ vm.runInNewContext(source,context);await new Promise(r=>setImmediate(r));return {nodes,calls,click:async id=>nodes.get(id).onclick({currentTarget:nodes.get(id)})};
+}
+test('never sends anything merely by opening popup',async()=>{const f=await fixture();assert.equal(f.calls.length,0);});
+test('sends only ARL and ticket after explicit click to exact allowed host',async()=>{const f=await fixture();await f.click('#send');const call=f.calls.find(x=>x[0]==='fetch');assert.equal(call[1],'http://192.168.1.5:8095/opendeezer-family/pair');assert.deepEqual(Object.keys(JSON.parse(call[2].body)).sort(),['arl','ticket']);assert.equal(call[2].redirect,'error');assert.equal(f.calls.some(x=>x[0]==='store'),false);assert.ok(f.calls.some(x=>x[0]==='unpermit'));});
+test('public HTTP destination is refused before reading cookie',async()=>{const f=await fixture('http://example.com');await f.click('#send');assert.equal(f.calls.length,0);assert.match(f.nodes.get('#status').textContent,/HTTPS/);});
+test('expired ticket never reads or sends cookies',async()=>{const f=await fixture('http://192.168.1.5:8095',true);await f.click('#send');assert.equal(f.calls.some(x=>['fetch','cookie'].includes(x[0])),false);});
